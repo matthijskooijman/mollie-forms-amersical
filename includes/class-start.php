@@ -479,7 +479,7 @@ Class RFMP_Start {
 
         $api_key    = get_post_meta($post, '_rfmp_api_key', true);
         $webhook    = get_home_url(null, RFMP_WEBHOOK . $post);
-        $redirect   = get_home_url(null, $_SERVER['REQUEST_URI']);
+        $redirect   = get_page_link();
         $redirect  .= strstr($redirect, '?') ? '&' : '?';
 
         do_action('rfmp_form_submitted', $post, $_POST);
