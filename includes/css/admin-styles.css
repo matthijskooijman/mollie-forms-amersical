@@ -1,0 +1,59 @@
+.rfmp_table td {
+    vertical-align: middle!important;
+    padding: 4px 0 4px 7px!important;
+    position: relative;
+}
+
+.rfmp_table td.sort {
+    width: 17px;
+    cursor: move;
+    font-size: 15px;
+    text-align: center;
+    background: #f9f9f9;
+    padding-right: 7px!important;
+}
+
+.rfmp_table td.sort:before {
+    content: "\f333";
+    font-family: Dashicons;
+    text-align: center;
+    line-height: 1;
+    color: #999;
+    display: block;
+    width: 17px;
+    float: left;
+    height: 100%;
+}
+
+.rfmp_table td .delete {
+    display: block;
+    text-indent: -9999px;
+    position: relative;
+    height: 1em;
+    width: 1em;
+    font-size: 1.2em;
+}
+
+.rfmp_table td .delete:before {
+    font-family: Dashicons;
+    speak: none;
+    font-weight: 400;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    text-indent: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    text-align: center;
+    content: "";
+    color: #999;
+}
+
+.rfmp_table td .delete:hover:before {
+    color: #a00;
+}
