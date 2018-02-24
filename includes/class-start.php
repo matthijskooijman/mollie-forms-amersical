@@ -12,6 +12,7 @@ Class RFMP_Start {
         add_shortcode('rfmp', array($this, 'add_rfmp_shortcode'));
         add_shortcode('rfmp-total', array($this, 'add_rfmp_total_shortcode'));
         add_shortcode('rfmp-goal', array($this, 'add_rfmp_goal_shortcode'));
+        add_shortcode('rfmp-vv', array($this, 'add_vv_shortcode'));
 
         $this->wpdb     = $wpdb;
         $this->mollie   = new Mollie_API_Client;
@@ -775,4 +776,372 @@ Class RFMP_Start {
         return $return;
     }
 
+    public function add_vv_shortcode($atts)
+    {
+        $atts = shortcode_atts(array(
+            'id' => ''
+        ), $atts);
+        $post = get_post($atts['id']);
+
+        if (!$post->ID)
+            return __('Form not found', 'mollie-forms');
+
+        $output = '<form method="post" data-rfmp-version="' . RFMP_VERSION . '">';
+
+        $output .= wp_nonce_field(basename(__FILE__), 'rfmp_form_' . $post->ID . '_nonce', true, false);
+        $output .= '<input type="hidden" name="rfmp-post" value="' . $post->ID . '">';
+
+        $fields_type = get_post_meta($post->ID, '_rfmp_fields_type', true);
+
+        // POST request and check required fields
+        if ($this->check_vv_required($post->ID) && $_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['rfmp-post']) && $_POST['rfmp-post'] == $post->ID)
+            $this->do_vv_post($post->ID);
+
+        // Message after payment
+        if (isset($_GET['payment']))
+        {
+            $class_success      = get_post_meta($post->ID, '_rfmp_class_success', true);
+            $class_error        = get_post_meta($post->ID, '_rfmp_class_error', true);
+            $message_success    = get_post_meta($post->ID, '_rfmp_msg_success', true);
+            $message_error      = get_post_meta($post->ID, '_rfmp_msg_error', true);
+            $after_payment      = get_post_meta($post->ID, '_rfmp_after_payment', true);
+            $redirect_success   = get_post_meta($post->ID, '_rfmp_redirect_success', true);
+            $redirect_error     = get_post_meta($post->ID, '_rfmp_redirect_error', true);
+
+            $payment        = $this->wpdb->get_row("SELECT * FROM " . RFMP_TABLE_PAYMENTS . " WHERE rfmp_id='" . esc_sql($_GET['payment']) . "'");
+            $registration   = $this->wpdb->get_row("SELECT * FROM " . RFMP_TABLE_REGISTRATIONS . " WHERE id='" . esc_sql($payment->registration_id) . "'");
+            if ($payment == null || $registration == null)
+                return '<p class="' . esc_attr($class_error) . '">' . esc_html__('No payment found', 'mollie-forms') . '</p>';
+            elseif ($registration->post_id == $post->ID)
+            {
+                if ($payment->payment_status == 'paid')
+                {
+                    if ($after_payment == 'redirect')
+                        wp_redirect($redirect_success);
+                    else
+                        return '<p class="' . esc_attr($class_success) . '">' . esc_html($message_success) . '</p>';
+                }
+                elseif($payment->payment_status != 'open')
+                {
+                    if ($after_payment == 'redirect')
+                        wp_redirect($redirect_error);
+                    else
+                        $output .= '<p class="' . esc_attr($class_error) . '">' . esc_html($message_error) . '</p>';
+                }
+            }
+        }
+
+        // Display form errors
+        $output .= $this->required_errors;
+
+        // Form fields
+        foreach ($fields_type as $key => $type)
+        {
+            $output .= '<p>';
+            $output .= $this->field_form($post->ID, $key, $type);
+            $output .= '</p>';
+        }
+
+        $output .= '</form>';
+
+        return $output;
+    }
+
+    private function check_vv_required($post)
+    {
+        $fields_label       = get_post_meta($post, '_rfmp_fields_label', true);
+        $fields_value       = get_post_meta($post, '_rfmp_fields_value', true);
+        $fields_required    = get_post_meta($post, '_rfmp_fields_required', true);
+
+        $option             = isset($_POST['rfmp_priceoptions_' . $post]) ? $_POST['rfmp_priceoptions_' . $post] : false;
+        $option_price       = get_post_meta($post, '_rfmp_priceoption_price', true);
+        $option_pricetype   = get_post_meta($post, '_rfmp_priceoption_pricetype', true);
+
+        $return = true;
+        $this->required_errors = '';
+
+        foreach ($fields_required as $key => $required)
+        {
+            $name = 'form_' . $post . '_field_' . $key;
+            if (isset($_POST[$name]) && empty($_POST[$name]) && $required)
+            {
+                $return = false;
+                $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('%s is a required field', 'mollie-forms'), $fields_label[$key]) . '</p>';
+            }
+        }
+
+        if (isset($_POST['rfmp_checkbox_hidden_' . $post]) && $_POST['rfmp_checkbox_hidden_' . $post] == '1' && !isset($_POST['rfmp_checkbox_' . $post]))
+        {
+            $return = false;
+            $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . esc_html__('Please give us authorization to collect the amount from your account periodically.', 'mollie-forms') . '</p>';
+        }
+
+        $price  = isset($option_price[$option]) ? $option_price[$option] : 0.00;
+        $type   = isset($option_pricetype[$option]) ? $option_pricetype[$option] : false;
+        $minimum = (float) str_replace(',','.', $price);
+        if (!$minimum)
+            $minimum = 1;
+
+        if ($option && $type == 'open' && $_POST['rfmp_amount_' . $post] < $minimum)
+        {
+            $return = false;
+            $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . esc_html__('Please fill in a higher amount.', 'mollie-forms') . ' ' . esc_html__('The minimum amount is:', 'mollie-forms') . ' &euro;' . number_format($minimum, 2, ',', '') . ' </p>';
+        }
+
+        return $return;
+    }
+
+
+    private function do_vv_post($post)
+    {
+        if (!isset($_POST['rfmp_form_' . $post . '_nonce']) || !wp_verify_nonce($_POST['rfmp_form_' . $post . '_nonce'], basename(__FILE__)))
+            return '';
+
+        $api_key    = get_post_meta($post, '_rfmp_api_key', true);
+        $webhook    = get_home_url(null, RFMP_WEBHOOK . $post);
+        $redirect   = get_page_link();
+        $redirect  .= strstr($redirect, '?') ? '&' : '?';
+
+        do_action('rfmp_form_submitted', $post, $_POST);
+
+        try {
+
+            if (!$api_key)
+                echo '<p style="color: red">' . esc_html__('No API-key set', 'mollie-forms') . '</p>';
+            else
+            {
+                $this->mollie->setApiKey($api_key);
+
+                $rfmp_id = uniqid('rfmp-' . $post . '-');
+
+                $option             = $_POST['rfmp_priceoptions_' . $post];
+                $option_desc        = get_post_meta($post, '_rfmp_priceoption_desc', true);
+                $option_price       = get_post_meta($post, '_rfmp_priceoption_price', true);
+                $option_pricetype   = get_post_meta($post, '_rfmp_priceoption_pricetype', true);
+                $option_shipping    = get_post_meta($post, '_rfmp_priceoption_shipping', true);
+                $option_frequency   = get_post_meta($post, '_rfmp_priceoption_frequency', true);
+                $option_frequencyval= get_post_meta($post, '_rfmp_priceoption_frequencyval', true);
+                $option_times       = get_post_meta($post, '_rfmp_priceoption_times', true);
+
+                $field_type         = get_post_meta($post, '_rfmp_fields_type', true);
+                $field_label        = get_post_meta($post, '_rfmp_fields_label', true);
+
+                $name_field         = array_search('name', $field_type);
+                $email_field        = array_search('email', $field_type);
+                $name_field_value   = trim($_POST['form_' . $post . '_field_' . $name_field]);
+                $email_field_value  = trim($_POST['form_' . $post . '_field_' . $email_field]);
+
+                $method             = $_POST['rfmp_payment_method_' . $post];
+                $fixed              = get_post_meta($post, '_rfmp_payment_method_fixed', true);
+                $variable           = get_post_meta($post, '_rfmp_payment_method_variable', true);
+
+                if ($option_pricetype[$option] == 'open')
+                    $price          = isset($_POST['rfmp_amount_' . $post]) ? (float) str_replace(',','.',$_POST['rfmp_amount_' . $post]) : 0;
+                else
+                    $price          = (float) str_replace(',','.',$option_price[$option]);
+
+                if (trim($option_shipping[$option]))
+                {
+                    // Shipping costs
+                    $price         += (float) str_replace(',','.',$option_shipping[$option]);
+                }
+
+                if ($option_frequency[$option] == 'once')
+                    $option_frequencyval[$option] = '';
+
+                $frequency          = trim($option_frequencyval[$option] . ' ' . $option_frequency[$option]);
+                $times              = $option_times[$option] > 0 ? (int) $option_times[$option] : null; // number of times
+
+                // Calculate total price
+                if (isset($variable[$method]) && $variable[$method])
+                {
+                    // Add variable surcharge for payment method
+                    $price *= (1 + str_replace(',','.',$variable[$method]) / 100);
+                }
+                if (isset($fixed[$method]) && $fixed[$method])
+                {
+                    // Add fixed surcharge for payment method
+                    $price += str_replace(',','.',$fixed[$method]);
+                }
+
+                $total = number_format(str_replace(',','.',$price), 2, '.', '');
+
+                // Create new customer at Mollie
+                $customer = $this->mollie->customers->create(array(
+                    'name'  => $name_field_value,
+                    'email' => $email_field_value,
+                ));
+
+                // Add customer to database
+                $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_CUSTOMERS . "
+                ( created_at, post_id, customer_id, name, email )
+                VALUES ( NOW(), %d, %s, %s, %s )",
+                    $post,
+                    $customer->id,
+                    $customer->name,
+                    $customer->email
+                ));
+                $customer_id = $this->wpdb->insert_id;
+
+                do_action('rfmp_customer_created', $post, $customer);
+
+                // Payment description
+                $search_desc    = array(
+                    '{rfmp="id"}',
+                    '{rfmp="amount"}',
+                    '{rfmp="priceoption"}',
+                    '{rfmp="form_title"}',
+                );
+                $replace_desc   = array(
+                    $rfmp_id,
+                    '€' . number_format($total, 2, ',', ''),
+                    $option_desc[$option],
+                    get_the_title($post),
+                );
+
+                // Add field values of registration
+                foreach ($field_label as $key => $field)
+                {
+                    if ($field_type[$key] != 'submit')
+                    {
+                        $value = $_POST['form_' . $post . '_field_' . $key];
+                        if ($field_type[$key] == 'payment_methods')
+                            $value = $_POST['rfmp_payment_method_' . $post];
+                        elseif ($field_type[$key] == 'priceoptions')
+                            $value = $option_desc[$option];
+
+                        $search_desc[]  = '{rfmp="' . trim($field) . '"}';
+                        $replace_desc[] = $value;
+                    }
+                }
+
+                $desc = get_post_meta($post, '_rfmp_payment_description', true);
+                if (!$desc)
+                    $desc = '{rfmp="priceoption"}';
+
+                $desc = str_replace($search_desc, $replace_desc, $desc);
+
+                // Create registration
+                $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_REGISTRATIONS . "
+                    ( created_at, post_id, customer_id, subscription_id, total_price, price_frequency, number_of_times, description, subs_fix )
+                    VALUES ( NOW(), %d, %s, NULL, %s, %s, %s, %s, 1 )",
+                    $post,
+                    $customer->id,
+                    $total,
+                    $frequency,
+                    $times,
+                    $desc
+                ));
+                $registration_id = $this->wpdb->insert_id;
+
+                if (!$registration_id)
+                {
+                    $message_error = get_post_meta($post, '_rfmp_msg_error', true);
+                    echo '<p style="color: red">' . esc_html($message_error) . '</p>';
+                }
+                else
+                {
+                    // Add field values of registration
+                    foreach ($field_label as $key => $field)
+                    {
+                        if ($field_type[$key] != 'submit')
+                        {
+                            $value = $_POST['form_' . $post . '_field_' . $key];
+                            if ($field_type[$key] == 'payment_methods')
+                                $value = $_POST['rfmp_payment_method_' . $post];
+                            elseif ($field_type[$key] == 'priceoptions')
+                                $value = $option_desc[$option];
+
+                            $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_REGISTRATION_FIELDS . "
+                    ( registration_id, field, `value`, `type` )
+                    VALUES ( %d, %s, %s, %s )",
+                                $registration_id,
+                                $field,
+                                $value,
+                                $field_type[$key]
+                            ));
+                        }
+                    }
+
+                    // Check frequency
+                    if ($option_frequency[$option] == 'once')
+                    {
+                        // Single payment
+                        $payment = $this->mollie->payments->create(array(
+                            'amount'            => $total,
+                            'description'       => $desc,
+                            'method'            => $method,
+                            'redirectUrl'       => $redirect . 'payment=' . $rfmp_id,
+                            'webhookUrl'        => $webhook,
+                            'customerId'        => $customer->id,
+                            'metadata'          => array(
+                                'rfmp_id'   => $rfmp_id,
+                                'name'      => $customer->name,
+                                'email'     => $customer->email,
+                                'priceoption'=> $option_desc[$option]
+                            )
+                        ));
+                    }
+                    else
+                    {
+                        // Recurring payment, subscription
+                        $payment = $this->mollie->payments->create(array(
+                            'amount'            => $total,
+                            'description'       => $desc,
+                            'method'            => $method,
+                            'redirectUrl'       => $redirect . 'payment=' . $rfmp_id,
+                            'webhookUrl'        => $webhook . '&first=' . $registration_id,
+                            'customerId'        => $customer->id,
+                            'recurringType'     => 'first',
+                            'metadata'          => array(
+                                'rfmp_id'   => $rfmp_id,
+                                'name'      => $customer->name,
+                                'email'     => $customer->email,
+                                'priceoption'=> $option_desc[$option]
+                            )
+                        ));
+                    }
+
+                    do_action('rfmp_payment_created', $post, $payment);
+
+                    // Create payment for registration
+                    $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_PAYMENTS . "
+                    ( created_at, registration_id, payment_id, payment_method, payment_mode, payment_status, amount, rfmp_id )
+                    VALUES ( NOW(), %d, %s, %s, %s, %s, %s, %s )",
+                        $registration_id,
+                        $payment->id,
+                        $payment->method,
+                        $payment->mode,
+                        $payment->status,
+                        $payment->amount,
+                        $rfmp_id
+                    ));
+
+                    return wp_redirect($payment->getPaymentUrl());
+                }
+            }
+
+
+        } catch (Mollie_API_Exception $e) {
+            echo '<p style="color: red">' . $e->getMessage() . '</p>';
+
+            if (isset($registration_id))
+            {
+                // an error occurred, delete registration
+                $this->wpdb->query($this->wpdb->prepare("DELETE FROM " . RFMP_TABLE_REGISTRATIONS . " WHERE id = %d",
+                    $registration_id
+                ));
+            }
+            if (isset($customer_id))
+            {
+                // an error occurred, delete customer
+                if (isset($customer) && isset($customer->id))
+                    $this->mollie->customers->delete($customer->id);
+
+                $this->wpdb->query($this->wpdb->prepare("DELETE FROM " . RFMP_TABLE_CUSTOMERS . " WHERE id = %d",
+                    $customer_id
+                ));
+            }
+        }
+    }
 }
