@@ -13,6 +13,7 @@ Class RFMP_Start {
         add_shortcode('rfmp-total', array($this, 'add_rfmp_total_shortcode'));
         add_shortcode('rfmp-goal', array($this, 'add_rfmp_goal_shortcode'));
         add_shortcode('rfmp-vv', array($this, 'add_vv_shortcode'));
+        add_action( 'wp_enqueue_scripts', array($this, 'add_vv_scripts'));
 
         $this->wpdb     = $wpdb;
         $this->mollie   = new Mollie_API_Client;
@@ -794,7 +795,7 @@ Class RFMP_Start {
         $fields_type = get_post_meta($post->ID, '_rfmp_fields_type', true);
 
         // POST request and check required fields
-        if ($this->check_vv_required($post->ID) && $_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['rfmp-post']) && $_POST['rfmp-post'] == $post->ID)
+        if ($_SERVER['REQUEST_METHOD'] == 'POST' && $this->check_vv_required($post->ID) && isset($_POST['rfmp-post']) && $_POST['rfmp-post'] == $post->ID)
             $this->do_vv_post($post->ID);
 
         // Message after payment
@@ -833,18 +834,443 @@ Class RFMP_Start {
 
         // Display form errors
         $output .= $this->required_errors;
-
-        // Form fields
-        foreach ($fields_type as $key => $type)
-        {
-            $output .= '<p>';
-            $output .= $this->field_form($post->ID, $key, $type);
-            $output .= '</p>';
-        }
+	$output .= $this->build_vv_form($post);
 
         $output .= '</form>';
 
         return $output;
+    }
+
+    private function build_tag($tag, $attrs, $content=null) {
+        $start = '<' . $tag;
+        foreach ($attrs as $name => $value) {
+            if ($value === false)
+                continue;
+            $start .= ' ';
+            $start .= htmlspecialchars($name);
+            if ($value !== true) {
+                $start .= '="';
+                $start .= htmlspecialchars($value);
+                $start .= '"';
+            }
+        }
+        if ($content === null) {
+            $start .= '/>';
+            return $start;
+        } else {
+            $start .= ">";
+            $end = '</' . $tag . ">";
+
+            if (is_callable($content))
+                $content = $content();
+            if (!$content)
+                return $start . $end;
+
+            $content = $this->flatten_content("    ", $content);
+            return [$start, $content, $end];
+        }
+    }
+
+    private function flatten_content($indent, $content) {
+        if (!is_array($content))
+            return [$indent . $content];
+        $result = [];
+        foreach ($content as $part) {
+            $result = array_merge($result, $this->flatten_content($indent, $part));
+        }
+        return $result;
+    }
+
+
+    private function process_attrs($attrs) {
+        $name = $attrs['name'];
+        if (array_key_exists($name, $this->vv_fields)) {
+            foreach ($this->vv_fields[$name] as $key => $value) {
+                if (strpos($key, "data-") === 0 || $key == 'required')
+                    $attrs[$key] = $value;
+            }
+        }
+
+        $label = $attrs['label'];
+        unset($attrs['label']);
+        if (array_key_exists('data-price', $attrs))
+            $label .= ' (€ ' . $attrs['data-price'] . ')';
+
+        // Add a marker for required fields, except for radio buttons
+        // where it does not make any sense.
+        if (!array_key_exists('type', $attrs) || $attrs['type'] != 'radio')
+            if (array_key_exists('required', $attrs) && $attrs['required'] || array_key_exists('data-required-if-shown', $attrs) && $attrs['data-required-if-shown'])
+                $label .= ' <span style="color:red;">*</span>';
+
+        if (array_key_exists('data-price-multiplier', $attrs) && array_key_exists('data-summary-label-one', $attrs))
+            $label .= ' (€ ' . $attrs['data-price-multiplier'] . ' per ' . $attrs['data-summary-label-one'] . ')';
+
+        // Preserve entered values on validation failure
+        $initval = array_key_exists($name, $_POST) ? $_POST[$name] : null;
+
+        return [$label, $attrs, $initval];
+    }
+
+    private function build_checkbox($attrs) {
+        list($label, $attrs, $initval) = $this->process_attrs($attrs);
+        $attrs['type'] = 'checkbox';
+        $attrs['value'] = 'Ja';
+        if ($initval)
+            $attrs['checked'] = true;
+
+        return '<p><label>'
+               . $this->build_tag('input', $attrs)
+               . $label
+               . '</label></p>';
+    }
+
+    private function build_radio($attrs) {
+        $attrs['type'] = 'radio';
+        list($label, $attrs, $initval) = $this->process_attrs($attrs);
+        if ($initval == $attrs['value'])
+            $attrs['checked'] = true;
+
+        return '<p><label>'
+               . $this->build_tag('input', $attrs)
+               . $label
+               . '</label></p>';
+    }
+
+    private function build_textarea($attrs) {
+        list($label, $attrs, $initval) = $this->process_attrs($attrs);
+        $attrs['style'] = 'width: 100%';
+
+        return '<p><label>'
+               . $label
+               . '<br/>'
+               . $this->build_tag('textarea', $attrs, $initval || '')
+               . '</label></p>';
+    }
+
+    private function build_text_input($attrs) {
+        list($label, $attrs, $initval) = $this->process_attrs($attrs);
+        $attrs['type'] = 'text';
+        $attrs['style'] = 'width: 100%';
+        $attrs['value'] = $initval;
+
+        return '<p><label>'
+               . $label
+               . '<br/>'
+               . $this->build_tag('input', $attrs)
+               . '</label></p>';
+    }
+
+    private function build_dropdown($attrs) {
+        list($label, $attrs, $initval) = $this->process_attrs($attrs);
+        $attrs['style'] = 'width: 100%';
+        $null = $attrs['null'];
+        unset($attrs['null']);
+        $options = $attrs['options'];
+        unset($attrs['options']);
+
+        // Generate options
+        $content = [];
+        if ($null)
+            $content[] = $this->build_tag('option', ['value' => '', 'selected' => ($option == $initval)], htmlspecialchars($null));
+        foreach ($options as $option) {
+            $content[] = $this->build_tag('option', ['selected' => ($option == $initval)], htmlspecialchars($option));
+        }
+
+        return ['<p><label>'
+               . $label
+               . '<br/>',
+               $this->build_tag('select', $attrs, $content),
+               '</label></p>'];
+    }
+    private $voorstellingen = ['Zaterdagmiddag 2 juni, 14:30', 'Zaterdagavond 2 juni, 20:30', 'Zondagmiddag 3 juni, 14:30'];
+    private $vv_fields = [
+        'vv-word-vriend' => [
+            'data-summary-label' => 'Vriendendonatie',
+            'required' => true,
+        ],
+        'vv-jaarlijkse-donatie-bedrag' => [
+            'data-price-recurring' => 1,
+            'data-price-multiplier' => 1,
+            'data-summary-label' => 'Jaarlijkse donatie',
+            'depends' => ['vv-word-vriend', 'Jaarlijks'],
+            'data-required-if-shown' => 1,
+            'require-number' => true,
+        ],
+        'vv-extra-donatie' => [
+            'depends' => ['vv-word-vriend', 'Jaarlijks'],
+            'nosave' => true,
+        ],
+        'vv-extra-donatie-bedrag' => [
+            'data-price-multiplier' => 1,
+            'data-summary-label' => 'Eenmalige extra donatie',
+            'depends' => 'vv-extra-donatie',
+            'data-required-if-shown' => 1,
+            'require-number' => true,
+        ],
+        'vv-eenmalige-donatie-bedrag' => [
+            'data-price-multiplier' => 1,
+            'data-summary-label' => 'Eenmalige donatie',
+            'depends' => ['vv-word-vriend', 'Eenmalig'],
+            'data-required-if-shown' => 1,
+            'require-number' => true,
+        ],
+        'vv-kaarten' => [
+            'nosave' => true,
+        ],
+        'vv-aantal-kaarten' => [
+            'data-price-multiplier' => 20,
+            'data-summary-label' => 'Aantal kaarten',
+            'data-summary-label-one' => 'toegangskaart',
+            'data-summary-label-more' => 'toegangskaarten',
+            'depends' => 'vv-kaarten',
+            'data-required-if-shown' => 1,
+        ],
+        'vv-voorstelling' => [
+            'data-summary-label' => 'Voorstelling',
+            'depends' => 'vv-kaarten',
+            'data-required-if-shown' => 1,
+        ],
+        'vv-button' => [
+            'data-price' => 3,
+            'data-summary-label' => 'Vriend-van-Amersical-button',
+        ],
+        'vv-groepsfoto' => [
+            'data-price' => 3,
+            'data-summary-label' => 'Gesigneerde groepsfoto',
+        ],
+        'vv-poster' => [
+            'data-price' => 3,
+            'data-summary-label' => 'Poster',
+        ],
+        'vv-lootjes' => [
+            'nosave' => true,
+        ],
+        'vv-aantal-lootjes' => [
+            'data-price-multiplier' => 1,
+            'data-summary-label' => 'Aantal lootjes',
+            'data-summary-label-one' => 'lootje',
+            'data-summary-label-more' => 'lootjes',
+            'depends' => 'vv-lootjes',
+            'data-required-if-shown' => 1,
+        ],
+        'vv-flyers' => [
+            'data-price' => 2,
+            'data-summary-label' => 'Flyers',
+        ],
+        'vv-adres' => [
+            'data-summary-label' => 'Postadres',
+            'data-required-if-shown' => 1,
+            'depends' => 'vv-flyers',
+        ],
+        'vv-website' => [
+            'data-summary-label' => 'Naam op website',
+        ],
+        'vv-email-updates' => [
+            'data-summary-label' => 'E-mailupdates',
+        ],
+        'vv-totaal' => [
+            'data-summary-label' => 'Kostenoverzicht',
+        ],
+        'vv-totaal-bedrag' => [
+            'nosave' => true,
+        ],
+    ];
+
+
+    public function add_vv_scripts() {
+        wp_enqueue_script('rfmp_vv_scripts', plugin_dir_url(__FILE__) . 'js/vv-scripts.js', array('jquery'), RFMP_VERSION);
+        wp_enqueue_style('rfmp_vv_styles', plugin_dir_url(__FILE__) . 'css/vv-styles.css', array(), RFMP_VERSION);
+    }
+
+    private function build_vv_form($post) {
+        $fields_type = get_post_meta($post->ID, '_rfmp_fields_type', true);
+        return join("", $this->flatten_content("\n    ", [
+            $this->build_tag('div', ['id' => 'vv-vriend-van-worden'], [
+                '<h2>Vriendendonatie</h2>',
+
+                $this->build_radio([
+                    'name' => 'vv-word-vriend',
+                    'value' => 'Jaarlijks',
+                    'label' => 'Ik wil Vriend van Amersical worden en doneer tot wederopzegging jaarlijks een bedrag',
+                    'data-show' => 'vv-jaarlijks-details',
+                ]),
+
+                $this->build_tag('div', ['id' => 'vv-jaarlijks-details', 'class' => 'vv-details'], [
+                    // TODO: Minimum?
+                    $this->build_text_input([
+                        'name' => 'vv-jaarlijkse-donatie-bedrag',
+                        'label' => 'Jaarlijkse donatie:',
+                        'placeholder' => '€',
+                    ]),
+                    '<p class="vv_explain">Je doneert direct bovenstaand bedrag en machtigt daarnaast Amersical om aan het begin van elk seizoen (september/oktober) dit bedrag opnieuw af te schrijven. Voorafgaand aan deze incasso wordt een herinneringsmail verstuurd. De machtiging kan op elk moment via e-mail ingetrokken worden.</p>',
+                    $this->build_checkbox([
+                        'name' => 'vv-extra-donatie',
+                        'label' => 'Ik wil eenmalig een extra bedrag doneren',
+                        'data-show' => 'vv-extra-donatie-details',
+                    ]),
+                    $this->build_tag('div', ['id' => 'vv-extra-donatie-details'], [
+                        $this->build_text_input([
+                            'name' => 'vv-extra-donatie-bedrag',
+                            'label' => 'Eenmalige extra donatie:',
+                            'placeholder' => '€',
+                        ]),
+                    ]),
+                ]),
+
+                $this->build_radio([
+                    'name' => 'vv-word-vriend',
+                    'value' => 'Eenmalig',
+                    'label' => 'Ik wil voor één seizoen Vriend van Amersical worden en doneer eenmalig een bedrag',
+                    'data-show' => 'vv-eenmalig-details',
+                ]),
+
+                $this->build_tag('div', ['id' => 'vv-eenmalig-details', 'class' => 'vv-details'], [
+                    // TODO: Minimum?
+                    $this->build_text_input([
+                        'name' => 'vv-eenmalige-donatie-bedrag',
+                        'label' => 'Eenmalige donatie: ',
+                        'placeholder' => '€',
+                    ]),
+                ]),
+
+                $this->build_radio([
+                    'name' => 'vv-word-vriend',
+                    'value' => 'Nee',
+                    'label' => 'Ik ben al vriend van Amersical en/of ik wil alleen hieronder dingen (bij)bestellen',
+                    'data-show' => '',
+                ]),
+            ]),
+
+            $this->build_tag('div', ['id' => 'vv-kaartjes'], [
+                '<h2>Kaarten voor de voorstelling "Amersicats"</h2>',
+                $this->build_checkbox([
+                    'name' => 'vv-kaarten',
+                    'label' => 'Ik wil graag kaarten voor de voorstelling reserveren',
+                    'data-show' => 'vv-kaartjes-details',
+                ]),
+
+                $this->build_tag('div', ['id' => 'vv-kaartjes-details', 'class' => 'vv-details'], [
+                    '<p class="vv_explain">Door hier kaarten te reserveren, betaal je € 5 extra per kaart, die ten goede komt aan de vereniging. De kaartjes liggen voorafgaand aan de voorstelling klaar bij de loterijtafel in het theater.</p>',
+                    $this->build_dropdown([
+                        'name' => 'vv-aantal-kaarten',
+                        'label' => 'Aantal kaarten:',
+                        'options' => range(1, 10),
+                    ]),
+
+                    $this->build_dropdown([
+                        'name' => 'vv-voorstelling',
+                        'label' => 'Voorstelling:',
+                        'options' => $this->voorstellingen,
+                        'null' => 'Maak een keuze',
+                    ]),
+                ]),
+            ]),
+
+            $this->build_tag('div', ['id' => 'vv-extras'], [
+                '<h2>Extra\'s bij de voorstelling</h2>',
+                '<p class="vv_explain">Met deze extra\'s kun je de vereniging op een leuke manier nog een beetje steunen. Deze extra’s kunnen worden afgehaald bij de loterijtafel in het theater.</p>',
+                $this->build_checkbox([
+                    'name' => 'vv-button',
+                    'label' => 'Ik wil graag een Vriend-van-Amersical-button ontvangen',
+                ]),
+                $this->build_checkbox([
+                    'name' => 'vv-groepsfoto',
+                    'label' => 'Ik wil graag een door de hele cast gesigneerde groepsfoto ontvangen',
+                ]),
+                $this->build_checkbox([
+                    'name' => 'vv-poster',
+                    'label' => 'Ik wil graag een poster als aandenken ontvangen',
+                ]),
+                $this->build_checkbox([
+                    'name' => 'vv-lootjes',
+                    'label' => 'Ik wil alvast lootjes voor de loterij kopen',
+                    'data-show' => 'vv-lootjes-details',
+                ]),
+                $this->build_tag('div', ['id' => 'vv-lootjes-details', 'class' => 'vv-details'], [
+                    $this->build_tag('p', ['class' => "vv_explain"], 'Tijdens elke voorstelling is er een loterij met leuke kleine prijzen. Lootjes die je hier bestelt, liggen voorafgaand aan de voorstelling bij de loterijtafel in het theater klaar (waar je natuurlijk ook contant lootjes kunt kopen). De trekking vindt plaats tijdens de pauze.'),
+                    $this->build_dropdown([
+                        'name' => 'vv-aantal-lootjes',
+                        'label' => 'Aantal lootjes: ',
+                        'options' => range(1, 10),
+                    ]),
+                ]),
+            ]),
+
+            $this->build_tag('div', ['id' => 'vv-overig'], [
+                '<h2>Overig</h2>',
+                $this->build_checkbox([
+                    'name' => 'vv-flyers',
+                    'label' => 'Stuur mij 25 flyers om bezoekers voor de voorstelling te werven', //
+                    'data-show' => 'vv-promo-details',
+                ]),
+                $this->build_tag('div', ['id' => 'vv-promo-details', 'class' => 'vv-details'], [
+                    $this->build_tag('p', ['class' => "vv_explain"], 'De flyers worden verstuurd zodra ze gedrukt zijn, meestal een aantal weken voor de voorstelling. Je betaalt alleen voor de verzendkosten.'),
+                    $this->build_textarea([
+                        'name' => 'vv-adres',
+                        'label' => 'Postadres:',
+                        'rows' => 2,
+                    ]),
+                ]),
+            ]),
+
+            $this->build_tag('div', ['id' => 'vv-gegevens'], [
+                '<h2>Persoonlijk gegevens</h2>',
+                '<p>' . $this->field_form($post->ID, array_search('name', $fields_type), 'name') . '</p>',
+                $this->build_checkbox([
+                    'name' => 'vv-website',
+                    'label' => 'Publiceer mijn naam op de website in de lijst met Vrienden',
+                ]),
+                '<p>' . $this->field_form($post->ID, array_search('email', $fields_type), 'email') . '</p>',
+                '<p class="vv_explain">Je e-mailadres wordt gebruikt voor een bevestiging van dit formulier, het aankondigen van incasso\'s en andere belangrijke zaken omtrent de Vriendschap. Je e-mailadres wordt niet met derden gedeeld.</p>',
+            ]),
+            $this->build_tag('div', ['id' => 'vv-overzicht'], [
+                '<h2>Overzicht</h2>',
+                // TODO: Ander betaalmethoden dan ideal mogelijk maken?
+                // Probleem is dat niet alle methods gebruikt kunnen
+                // worden voor recurring payments. Mollie Forms checkt
+                // daarop, maar gaat uit van een enkel "price options"
+                // veld met een bepaalde naam, dat wij niet hebben.
+                // Voor nu maar even altijd ideal hardcoden.
+                //'<p>' . $this->field_form($post->ID, array_search('payment_methods', $fields_type), 'payment_methods') . '</p>',
+                $this->build_tag('p', ['id' => 'vv-totaal'], ''),
+                $this->build_tag('input', [
+                    'name' => 'vv-totaal',
+                    'type' => 'hidden',
+                ]),
+                $this->build_tag('input', [
+                    'name' => 'vv-totaal-bedrag',
+                    'type' => 'hidden',
+                ]),
+                // TODO: Vriendelijker naam dan "Betalen"?
+                '<p>' . $this->field_form($post->ID, array_search('submit', $fields_type), 'submit') . '</p>',
+            ]),
+        ]));
+    }
+
+    private function get_vv_field_value($name, $values) {
+        $attrs = $this->vv_fields[$name];
+        $attrs || die("field not found " . $name);
+
+        // Check if the field is visible/enabled
+        if (array_key_exists('depends', $attrs)) {
+            $depends = $attrs['depends'];
+            if (is_array($depends)) {
+                if ($this->get_vv_field_value($depends[0], $values) != $depends[1])
+                    return null;
+            } else {
+                if (!$this->get_vv_field_value($depends, $values))
+                    return null;
+            }
+        }
+
+        if (!array_key_exists($name, $values))
+            return '';
+
+        $value = $values[$name];
+
+        if (array_key_exists('require-number', $attrs) && $attrs['require-number'])
+            $value = str_replace(',','.', $value);
+        return $value;
     }
 
     private function check_vv_required($post)
@@ -852,10 +1278,6 @@ Class RFMP_Start {
         $fields_label       = get_post_meta($post, '_rfmp_fields_label', true);
         $fields_value       = get_post_meta($post, '_rfmp_fields_value', true);
         $fields_required    = get_post_meta($post, '_rfmp_fields_required', true);
-
-        $option             = isset($_POST['rfmp_priceoptions_' . $post]) ? $_POST['rfmp_priceoptions_' . $post] : false;
-        $option_price       = get_post_meta($post, '_rfmp_priceoption_price', true);
-        $option_pricetype   = get_post_meta($post, '_rfmp_priceoption_pricetype', true);
 
         $return = true;
         $this->required_errors = '';
@@ -866,7 +1288,7 @@ Class RFMP_Start {
             if (isset($_POST[$name]) && empty($_POST[$name]) && $required)
             {
                 $return = false;
-                $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('%s is a required field', 'mollie-forms'), $fields_label[$key]) . '</p>';
+                $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('%s is een verplicht veld', 'mollie-forms'), $fields_label[$key]) . '</p>';
             }
         }
 
@@ -876,16 +1298,31 @@ Class RFMP_Start {
             $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . esc_html__('Please give us authorization to collect the amount from your account periodically.', 'mollie-forms') . '</p>';
         }
 
-        $price  = isset($option_price[$option]) ? $option_price[$option] : 0.00;
-        $type   = isset($option_pricetype[$option]) ? $option_pricetype[$option] : false;
-        $minimum = (float) str_replace(',','.', $price);
-        if (!$minimum)
-            $minimum = 1;
+        // Check our custom fields
+        foreach ($this->vv_fields as $name => $attrs) {
+            $value = $this->get_vv_field_value($name, $_POST);
+            if ($value === null) // Not visible, always ok
+                continue;
 
-        if ($option && $type == 'open' && $_POST['rfmp_amount_' . $post] < $minimum)
-        {
+            if ($value) {
+                if (array_key_exists('require-number', $attrs) && $attrs['require-number'] && !is_numeric($value)) {
+                    $return = false;
+                    $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('bij %s is geen getal ingevuld', 'mollie-forms'), $attrs['data-summary-label']) . '</p>';
+                }
+                continue;
+            }
+            if (!array_key_exists('required', $attrs) && !array_key_exists('data-required-if-shown', $attrs))
+                continue;
+
             $return = false;
-            $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . esc_html__('Please fill in a higher amount.', 'mollie-forms') . ' ' . esc_html__('The minimum amount is:', 'mollie-forms') . ' &euro;' . number_format($minimum, 2, ',', '') . ' </p>';
+            $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('%s is een verplicht veld', 'mollie-forms'), $attrs['data-summary-label']) . '</p>';
+        }
+
+        $amount = (float)$this->get_vv_field_value('vv-totaal-bedrag', $_POST);
+        $minimum = 2;
+        if ($amount < $minimum) {
+            $return = false;
+            $this->required_errors .= '<p class="rfmp_error" style="color:red;">- ' . sprintf(esc_html__('Minimum totaalbedrag is € ' . number_format($minimum, 2, ',' ,''), 'mollie-forms'), $attrs['data-summary-label']) . '</p>';
         }
 
         return $return;
@@ -914,15 +1351,6 @@ Class RFMP_Start {
 
                 $rfmp_id = uniqid('rfmp-' . $post . '-');
 
-                $option             = $_POST['rfmp_priceoptions_' . $post];
-                $option_desc        = get_post_meta($post, '_rfmp_priceoption_desc', true);
-                $option_price       = get_post_meta($post, '_rfmp_priceoption_price', true);
-                $option_pricetype   = get_post_meta($post, '_rfmp_priceoption_pricetype', true);
-                $option_shipping    = get_post_meta($post, '_rfmp_priceoption_shipping', true);
-                $option_frequency   = get_post_meta($post, '_rfmp_priceoption_frequency', true);
-                $option_frequencyval= get_post_meta($post, '_rfmp_priceoption_frequencyval', true);
-                $option_times       = get_post_meta($post, '_rfmp_priceoption_times', true);
-
                 $field_type         = get_post_meta($post, '_rfmp_fields_type', true);
                 $field_label        = get_post_meta($post, '_rfmp_fields_label', true);
 
@@ -931,40 +1359,44 @@ Class RFMP_Start {
                 $name_field_value   = trim($_POST['form_' . $post . '_field_' . $name_field]);
                 $email_field_value  = trim($_POST['form_' . $post . '_field_' . $email_field]);
 
-                $method             = $_POST['rfmp_payment_method_' . $post];
-                $fixed              = get_post_meta($post, '_rfmp_payment_method_fixed', true);
-                $variable           = get_post_meta($post, '_rfmp_payment_method_variable', true);
+                //$method             = $_POST['rfmp_payment_method_' . $post];
+                $method             = 'ideal';
 
-                if ($option_pricetype[$option] == 'open')
-                    $price          = isset($_POST['rfmp_amount_' . $post]) ? (float) str_replace(',','.',$_POST['rfmp_amount_' . $post]) : 0;
-                else
-                    $price          = (float) str_replace(',','.',$option_price[$option]);
+                // Calculate the amount based on the form fields
+                $amount = 0;
+                foreach ($this->vv_fields as $name => $attrs) {
+                    $value = $this->get_vv_field_value($name, $_POST);
+                    if (!$value)
+                        continue;
 
-                if (trim($option_shipping[$option]))
-                {
-                    // Shipping costs
-                    $price         += (float) str_replace(',','.',$option_shipping[$option]);
+                    if (array_key_exists('data-price-multiplier', $attrs)) {
+                        $multiplier = (float)$this->get_vv_field_value($name, $_POST);
+                        $amount += $multiplier * $attrs['data-price-multiplier'];
+                    } else if (array_key_exists('data-price', $attrs)) {
+                        $amount += $attrs['data-price'];
+                    }
                 }
 
-                if ($option_frequency[$option] == 'once')
-                    $option_frequencyval[$option] = '';
 
-                $frequency          = trim($option_frequencyval[$option] . ' ' . $option_frequency[$option]);
-                $times              = $option_times[$option] > 0 ? (int) $option_times[$option] : null; // number of times
-
-                // Calculate total price
-                if (isset($variable[$method]) && $variable[$method])
-                {
-                    // Add variable surcharge for payment method
-                    $price *= (1 + str_replace(',','.',$variable[$method]) / 100);
-                }
-                if (isset($fixed[$method]) && $fixed[$method])
-                {
-                    // Add fixed surcharge for payment method
-                    $price += str_replace(',','.',$fixed[$method]);
+                // Check that javascript was displaying the same amount
+                // (Except when no JS is running and the check amount is empty)
+                $check_amount = str_replace(',','.', $_POST['vv-totaal-bedrag']);
+                if ($check_amount && $amount != (float)$check_amount) {
+                    error_log(var_export($_POST, true));
+                    error_log('Calculated amount: ' . $amount);
+                    error_log('Check amount: ' . (float)$check_amount);
+                    die("Interne fout opgetreden");
                 }
 
-                $total = number_format(str_replace(',','.',$price), 2, '.', '');
+                // Figure out the recurring amount, if any
+                $times = 0;
+                $frequency = 'once';
+                $times = 0;
+                $recurring_amount = (float)$this->get_vv_field_value('vv-jaarlijkse-donatie-bedrag', $_POST);
+                if ($recurring_amount) {
+                    $frequency = 'manual';
+                    $times = -1;
+                }
 
                 // Create new customer at Mollie
                 $customer = $this->mollie->customers->create(array(
@@ -989,13 +1421,13 @@ Class RFMP_Start {
                 $search_desc    = array(
                     '{rfmp="id"}',
                     '{rfmp="amount"}',
-                    '{rfmp="priceoption"}',
+                    '{rfmp="recurring_amount"}',
                     '{rfmp="form_title"}',
                 );
                 $replace_desc   = array(
                     $rfmp_id,
-                    '€' . number_format($total, 2, ',', ''),
-                    $option_desc[$option],
+                    '€' . number_format($amount, 2, ',', ''),
+                    '€' . number_format($recurring_amount, 2, ',', ''),
                     get_the_title($post),
                 );
 
@@ -1006,28 +1438,34 @@ Class RFMP_Start {
                     {
                         $value = $_POST['form_' . $post . '_field_' . $key];
                         if ($field_type[$key] == 'payment_methods')
-                            $value = $_POST['rfmp_payment_method_' . $post];
+                            continue; //$value = $_POST['rfmp_payment_method_' . $post];
                         elseif ($field_type[$key] == 'priceoptions')
-                            $value = $option_desc[$option];
+                            continue; //$value = $option_desc[$option];
 
                         $search_desc[]  = '{rfmp="' . trim($field) . '"}';
                         $replace_desc[] = $value;
                     }
                 }
+                // Add our custom fields
+                foreach ($this->vv_fields as $name => $attrs) {
+                    $search_desc[]  = '{rfmp="' . trim($attrs['data-summary-label']) . '"}';
+                    $replace_desc[] = $this->get_vv_field_value($name, $_POST);
+                }
 
                 $desc = get_post_meta($post, '_rfmp_payment_description', true);
                 if (!$desc)
-                    $desc = '{rfmp="priceoption"}';
+                    $desc = '{rfmp="form_title"}';
 
                 $desc = str_replace($search_desc, $replace_desc, $desc);
 
                 // Create registration
                 $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_REGISTRATIONS . "
-                    ( created_at, post_id, customer_id, subscription_id, total_price, price_frequency, number_of_times, description, subs_fix )
-                    VALUES ( NOW(), %d, %s, NULL, %s, %s, %s, %s, 1 )",
+                    ( created_at, post_id, customer_id, subscription_id, total_price, recurring_price, price_frequency, number_of_times, description, subs_fix )
+                    VALUES ( NOW(), %d, %s, NULL, %s, %s, %s, %s, %s, 1 )",
                     $post,
                     $customer->id,
-                    $total,
+                    $amount,
+                    $recurring_amount,
                     $frequency,
                     $times,
                     $desc
@@ -1048,9 +1486,9 @@ Class RFMP_Start {
                         {
                             $value = $_POST['form_' . $post . '_field_' . $key];
                             if ($field_type[$key] == 'payment_methods')
-                                $value = $_POST['rfmp_payment_method_' . $post];
+                                continue; // $value = $_POST['rfmp_payment_method_' . $post];
                             elseif ($field_type[$key] == 'priceoptions')
-                                $value = $option_desc[$option];
+                                continue; // $value = $option_desc[$option];
 
                             $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_REGISTRATION_FIELDS . "
                     ( registration_id, field, `value`, `type` )
@@ -1063,12 +1501,37 @@ Class RFMP_Start {
                         }
                     }
 
+                    // Add our custom fields
+                    foreach ($this->vv_fields as $name => $attrs) {
+                        if (array_key_exists('nosave', $attrs) && $attrs['nosave'])
+                            continue;
+                        $value = $this->get_vv_field_value($name, $_POST);
+                        if ($value === null)
+                            continue;
+                        if (!$value)
+                            $value = 'Nee';
+                        if (!array_key_exists('data-summary-label', $attrs))
+                            die("No label for " . $name);
+                        $label = $attrs['data-summary-label'];
+
+
+                        $this->wpdb->query($this->wpdb->prepare("INSERT INTO " . RFMP_TABLE_REGISTRATION_FIELDS . "
+                ( registration_id, field, `value`, `type` )
+                VALUES ( %d, %s, %s, %s )",
+                            $registration_id,
+                            $label,
+                            $value,
+                            'text'
+                        ));
+
+                    }
+
                     // Check frequency
-                    if ($option_frequency[$option] == 'once')
+                    if (!$recurring_amount)
                     {
                         // Single payment
                         $payment = $this->mollie->payments->create(array(
-                            'amount'            => $total,
+                            'amount'            => $amount,
                             'description'       => $desc,
                             'method'            => $method,
                             'redirectUrl'       => $redirect . 'payment=' . $rfmp_id,
@@ -1078,7 +1541,6 @@ Class RFMP_Start {
                                 'rfmp_id'   => $rfmp_id,
                                 'name'      => $customer->name,
                                 'email'     => $customer->email,
-                                'priceoption'=> $option_desc[$option]
                             )
                         ));
                     }
@@ -1086,18 +1548,22 @@ Class RFMP_Start {
                     {
                         // Recurring payment, subscription
                         $payment = $this->mollie->payments->create(array(
-                            'amount'            => $total,
+                            'amount'            => $amount,
                             'description'       => $desc,
                             'method'            => $method,
                             'redirectUrl'       => $redirect . 'payment=' . $rfmp_id,
-                            'webhookUrl'        => $webhook . '&first=' . $registration_id,
+                            // Don't tell the webhook that this is
+                            // recurring, so it won't create a
+                            // subscription
+                            //'webhookUrl'        => $webhook . '&first=' . $registration_id,
+                            'webhookUrl'        => $webhook,
                             'customerId'        => $customer->id,
                             'recurringType'     => 'first',
                             'metadata'          => array(
                                 'rfmp_id'   => $rfmp_id,
                                 'name'      => $customer->name,
                                 'email'     => $customer->email,
-                                'priceoption'=> $option_desc[$option]
+                                'recurring_amount' => $recurring_amount,
                             )
                         ));
                     }

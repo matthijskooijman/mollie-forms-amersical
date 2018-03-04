@@ -1,0 +1,64 @@
+/* Explanation text about (chosen) options */
+.vv_explain {
+	font-size:85%;
+	font-family:sans-serif;
+	color:#555;
+}
+
+.vv-details {
+	border:1px solid #7a7a7a;
+	background-color:#efefef;
+	margin-left:5%;
+	padding:3%;
+	margin-bottom:2%
+}
+
+/* Div that shows total of costs (filled via javascript) */
+#vv-totaal {
+	border:1px solid #7a7a7a;
+	background-color:#efefef;
+	padding:3%;
+}
+
+/* Span with total amount, to be shown to the far right of its container */
+.amountright {
+	float:right;
+}
+
+.succes-form {
+	background-color: #b6eac9;
+	border: 1px solid #3aaf8a;
+	color:#006344;
+	padding: 3%;
+}
+
+.error-form {
+	background-color:#ff828c;
+	border: 1px solid #aa000e;
+	color:#77020c;
+	padding: 3%;
+}
+
+/* Button to form to 'call people to action' */
+.vv-action-button,.vv-action-button:link, .vv-action-button:visited {
+	padding:1em 4em 1em 1em;
+	margin:1em 0;
+	display: inline-block; /* to make the margin work */
+	text-decoration:none;
+	text-align:left;
+	color:#fff;
+	border:1px solid darkblue;
+	border-radius:1em;
+	background-color:dark-blue; /* fallback */
+	background-image:url('love_paw.png'); /* fallback */
+	background: url('love_paw.png') 89% 51% no-repeat, radial-gradient(circle closest-side at 85%, white, #fcf892, darkblue);
+	background-size: 12% auto, cover;
+	box-shadow: 1px 1px 8px 2px #918dfc inset;
+}
+
+.vv-action-button:hover {
+	text-decoration:none;
+	border:1px solid #f79696;
+	color:#f79696;
+	box-shadow: -3px -3px 8px 2px #050182 inset;
+}
