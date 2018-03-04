@@ -2,9 +2,9 @@
 /*
 Plugin Name: Mollie Forms
 Description: Create registration forms with payment methods of Mollie. One-time and recurring payments are possible.
-Version: 1.1.5
-Author: Wobbie.nl
-Author URI: http://wobbie.nl
+Version: 1.1.5+amersical1
+Author: Wobbie.nl & Amersical
+Author URI: http://amersical.nl
 Text Domain: mollie-forms
 */
 
@@ -19,7 +19,7 @@ if (!defined('RFMP_PLUGIN_PATH')) {
 
 // Plugin Version
 if (!defined('RFMP_VERSION')) {
-    define('RFMP_VERSION', '1.1.5');
+    define('RFMP_VERSION', '1.1.5+amersical1');
 }
 
 define('RFMP_PLUGIN_BASE', plugin_basename(__FILE__));
