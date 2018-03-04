@@ -9,6 +9,7 @@ class RFMP_Registrations_Table extends WP_List_Table {
         $columns['post_id'] = __('Form', 'mollie-forms');
         $columns['customer'] = __('Customer', 'mollie-forms');
         $columns['total_price'] = __('Total price', 'mollie-forms');
+        $columns['recurring_price'] = __('Recurring price', 'mollie-forms');
         $columns['payment_status'] = __('Payment status', 'mollie-forms');
         $columns['price_frequency'] = __('Frequency', 'mollie-forms');
         $columns['subscription_status'] = __('Subscription status', 'mollie-forms');
@@ -64,6 +65,11 @@ class RFMP_Registrations_Table extends WP_List_Table {
                 break;
             case 'total_price':
                 return '&euro; ' . number_format($item[$column_name], 2, ',', '');
+                break;
+            case 'recurring_price':
+                if ((float)$item[$column_name])
+                    return '&euro; ' . number_format($item[$column_name], 2, ',', '');
+                return '';
                 break;
             case 'post_id':
                 $post = get_post($item[$column_name]);

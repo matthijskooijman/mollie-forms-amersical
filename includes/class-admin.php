@@ -1103,6 +1103,12 @@ Class RFMP_Admin {
                         <td class="field column-field column-primary"><strong><?php echo esc_html_e('Total price', 'mollie-forms');?></strong></td>
                         <td class="value column-value"><?php echo '&euro; ' . number_format($registration->total_price, 2, ',', '');?></td>
                     </tr>
+                    <?php if ((float)$registration->recurring_price) { ?>
+                    <tr>
+                        <td class="field column-field column-primary"><strong><?php echo esc_html_e('Recurring price', 'mollie-forms');?></strong></td>
+                        <td class="value column-value"><?php echo '&euro; ' . number_format($registration->recurring_price, 2, ',', '');?></td>
+                    </tr>
+                    <?php } ?>
                     <tr>
                         <td class="field column-field column-primary"><strong><?php echo esc_html_e('Mollie Customer ID', 'mollie-forms');?></strong></td>
                         <td class="value column-value"><?php echo esc_html($registration->customer_id);?></td>

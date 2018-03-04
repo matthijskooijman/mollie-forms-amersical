@@ -67,6 +67,7 @@ function rfmp_install_plugin()
             customer_id       varchar(45),
             subscription_id   varchar(45),
             total_price       decimal(8,2),
+            recurring_price   decimal(8,2),
             price_frequency   varchar(45),
             number_of_times   mediumint(9),
             description       varchar(255),
