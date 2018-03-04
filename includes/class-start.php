@@ -305,7 +305,7 @@ Class RFMP_Start {
             {
                 $first = true;
                 $methods .= '<ul class="' . esc_attr($class) . '" style="list-style-type:none;margin:0;">';
-                foreach ($this->mollie->methods->all(0,0, array('locale' => get_locale(), 'recurringType' => null)) as $method)
+                foreach ($this->mollie->methods->all(0,0, array('locale' => 'nl', 'recurringType' => null)) as $method)
                 {
                     if ($active[$method->id])
                     {
@@ -336,7 +336,7 @@ Class RFMP_Start {
             else
             {
                 $methods .= '<select name="rfmp_payment_method_' . $post . '" class="' . esc_attr($class) . '">';
-                foreach ($this->mollie->methods->all(0,0, array('locale' => get_locale())) as $method)
+                foreach ($this->mollie->methods->all(0,0, array('locale' => 'nl')) as $method)
                 {
                     if ($active[$method->id])
                     {
