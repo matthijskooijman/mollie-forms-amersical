@@ -93,7 +93,7 @@ class RFMP_Registrations_Table extends WP_List_Table {
                     $subs_table = RFMP_TABLE_CUSTOMERS;
 
                 $subscriptions = $wpdb->get_var("SELECT COUNT(*) FROM " . $subs_table . " WHERE sub_status='active' AND registration_id=" . (int) $item['id']);
-                if ($item['price_frequency'] == 'once')
+                if ($item['price_frequency'] == 'once' || $item['price_frequency'] == 'manual')
                     return '';
 
                 return $subscriptions ? '<span style="color: green;">' . __('Active', 'mollie-forms') . '</span>' : '<span style="color: red;">' . __('Not active', 'mollie-forms') . '</span>';
@@ -119,6 +119,9 @@ class RFMP_Registrations_Table extends WP_List_Table {
         {
             case 'once':
                 $return = '';
+                break;
+            case 'manual':
+                $return = 'manual';
                 break;
             case '1 months':
                 $return = __('per month', 'mollie-forms');
