@@ -1032,7 +1032,7 @@ Class RFMP_Start {
         ],
         'vv-button' => [
             'data-price' => 3,
-            'data-summary-label' => 'Vriend-van-Amersical-button',
+            'data-summary-label' => 'Vriendenbutton',
         ],
         'vv-groepsfoto' => [
             'data-price' => 3,
@@ -1136,7 +1136,7 @@ Class RFMP_Start {
                 $this->build_radio([
                     'name' => 'vv-word-vriend',
                     'value' => 'Nee',
-                    'label' => 'Ik ben al vriend van Amersical en/of ik wil alleen hieronder dingen (bij)bestellen',
+                    'label' => 'Ik ben al vriend van Amersical en/of ik wil alleen hieronder extra\'s (bij)bestellen',
                     'data-show' => '',
                 ]),
             ]),
@@ -1171,7 +1171,7 @@ Class RFMP_Start {
                 '<p class="vv_explain">Met deze extra\'s kun je de vereniging op een leuke manier nog een beetje steunen. Deze extra’s kunnen worden afgehaald bij de loterijtafel in het theater.</p>',
                 $this->build_checkbox([
                     'name' => 'vv-button',
-                    'label' => 'Ik wil graag een Vriend-van-Amersical-button ontvangen',
+                    'label' => 'Ik wil graag een Vriendenbutton ontvangen',
                 ]),
                 $this->build_checkbox([
                     'name' => 'vv-groepsfoto',
@@ -1200,11 +1200,11 @@ Class RFMP_Start {
                 '<h2>Overig</h2>',
                 $this->build_checkbox([
                     'name' => 'vv-flyers',
-                    'label' => 'Stuur mij 25 flyers om bezoekers voor de voorstelling te werven', //
+                    'label' => 'Stuur mij 10 flyers om bezoekers voor de voorstelling te werven', //
                     'data-show' => 'vv-promo-details',
                 ]),
                 $this->build_tag('div', ['id' => 'vv-promo-details', 'class' => 'vv-details'], [
-                    $this->build_tag('p', ['class' => "vv_explain"], 'De flyers worden verstuurd zodra ze gedrukt zijn, meestal een aantal weken voor de voorstelling. Je betaalt alleen voor de verzendkosten.'),
+                    $this->build_tag('p', ['class' => "vv_explain"], 'De flyers worden verstuurd zodra ze gedrukt zijn, meestal een aantal weken voor de voorstelling.'),
                     $this->build_textarea([
                         'name' => 'vv-adres',
                         'label' => 'Postadres:',
